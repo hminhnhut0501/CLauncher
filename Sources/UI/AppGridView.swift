@@ -29,7 +29,7 @@ public struct AppGridView: View {
 
     private var gridColumns: [GridItem] {
         Array(
-            repeating: GridItem(.flexible(minimum: 120, maximum: 160), spacing: 20),
+            repeating: GridItem(.flexible(minimum: 100), spacing: 20),
             count: store.columnsCount
         )
     }
@@ -55,7 +55,7 @@ public struct AppGridView: View {
                                                 if pageIndex == store.currentPage {
                                                     Color.clear.preference(
                                                         key: CellFramePreferenceKey.self,
-                                                        value: [item.id: geo.frame(in: .named("AppGridViewSpace"))]
+                                                        value: [item.id: geo.frame(in: .named("CurrentPageContentSpace"))]
                                                     )
                                                 }
                                             }
@@ -67,6 +67,7 @@ public struct AppGridView: View {
                             Spacer(minLength: 0)
                         }
                         .frame(width: totalWidth)
+                        .coordinateSpace(name: pageIndex == store.currentPage ? "CurrentPageContentSpace" : "InactivePageSpace")
                     }
                 }
                 .offset(x: -CGFloat(store.currentPage) * totalWidth + motion.dragOffset)
@@ -131,14 +132,14 @@ public struct AppGridView: View {
             currentDragPoint = currentPoint
 
             // Dual Hit-Testing:
-            // 1. Instant mathematical GridGeometry lookup
-            if let idx = geometry.itemIndex(at: value.startLocation, maxItems: currentPageItems.count) {
+            // 1. Pixel-perfect preference frame lookup (measured directly on rendered view)
+            if let hitByFrame = currentPageItems.first(where: {
+                layoutStore.cellFrames[$0.id]?.contains(value.startLocation) == true
+            }) {
+                activeTouchedItem = hitByFrame
+            } else if let idx = geometry.itemIndex(at: value.startLocation, maxItems: currentPageItems.count) {
+                // 2. Mathematical GridGeometry fallback
                 activeTouchedItem = currentPageItems[idx]
-            } else {
-                // 2. Fallback to preference frames
-                activeTouchedItem = currentPageItems.first(where: {
-                    layoutStore.cellFrames[$0.id]?.contains(value.startLocation) == true
-                })
             }
 
             // Start Press & Hold (Nhấn Giữ) Timer (0.20s):
@@ -371,7 +372,7 @@ public struct GridGeometry {
 
     public var colWidth: CGFloat {
         let available = totalWidth - (padH * 2) - CGFloat(max(1, columns - 1)) * spacingX
-        return max(100, available / CGFloat(max(1, columns)))
+        return available / CGFloat(max(1, columns))
     }
 
     public func frame(for index: Int) -> CGRect {
@@ -383,9 +384,9 @@ public struct GridGeometry {
     }
 
     public func itemIndex(at point: CGPoint, maxItems: Int) -> Int? {
-        guard point.x >= padH - 12 && point.y >= padTop - 12 else { return nil }
-        let col = Int((point.x - padH + 10) / (colWidth + spacingX))
-        let row = Int((point.y - padTop + 10) / (cellHeight + spacingY))
+        guard point.x >= padH && point.y >= padTop else { return nil }
+        let col = Int((point.x - padH) / (colWidth + spacingX))
+        let row = Int((point.y - padTop) / (cellHeight + spacingY))
         guard col >= 0 && col < columns && row >= 0 && row < rows else { return nil }
         let index = row * columns + col
         guard index >= 0 && index < maxItems else { return nil }

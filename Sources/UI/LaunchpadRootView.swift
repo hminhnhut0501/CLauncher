@@ -111,19 +111,7 @@ public struct LaunchpadRootView: View {
             // 4. Active Folder Expanded Overlay
             if let folder = store.activeFolder {
                 FolderExpandedOverlayView(
-                    folder: Binding(
-                        get: { folder },
-                        set: { updated in
-                            store.activeFolder = updated
-                            if let idx = store.items.firstIndex(where: {
-                                if case .folder(let f) = $0 { return f.id == updated.id }
-                                return false
-                            }) {
-                                store.items[idx] = .folder(updated)
-                                store.saveLayout()
-                            }
-                        }
-                    ),
+                    folder: folder,
                     onLaunch: onDismiss,
                     onClose: {
                         store.activeFolder = nil

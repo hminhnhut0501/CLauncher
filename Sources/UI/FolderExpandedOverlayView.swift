@@ -2,9 +2,18 @@ import SwiftUI
 import AppKit
 
 public struct FolderExpandedOverlayView: View {
-    @Binding public var folder: LaunchpadFolder
+    public let initialFolder: LaunchpadFolder
     public let onLaunch: () -> Void
     public let onClose: () -> Void
+
+    @ObservedObject private var store: LaunchpadStore = .shared
+
+    private var folder: LaunchpadFolder {
+        if let current = store.activeFolder, current.id == initialFolder.id {
+            return current
+        }
+        return initialFolder
+    }
 
     @State private var folderName: String = ""
     @State private var isAppeared: Bool = false
@@ -39,14 +48,14 @@ public struct FolderExpandedOverlayView: View {
     )
 
     public init(
-        folder: Binding<LaunchpadFolder>,
+        folder: LaunchpadFolder,
         onLaunch: @escaping () -> Void,
         onClose: @escaping () -> Void
     ) {
-        self._folder = folder
+        self.initialFolder = folder
         self.onLaunch = onLaunch
         self.onClose = onClose
-        self._folderName = State(initialValue: folder.wrappedValue.name)
+        self._folderName = State(initialValue: folder.name)
     }
 
     public var body: some View {
@@ -263,7 +272,6 @@ public struct FolderExpandedOverlayView: View {
                         if let fromIdx = folder.apps.firstIndex(where: { $0.id == touched.id }),
                            let toIdx = folder.apps.firstIndex(where: { $0.id == targetApp.id }) {
                             LaunchpadStore.shared.reorderAppInFolder(folderId: folder.id, fromIndex: fromIdx, toIndex: toIdx)
-                            self.folder = LaunchpadStore.shared.activeFolder ?? folder
                         }
                     }
                 }
@@ -295,7 +303,6 @@ public struct FolderExpandedOverlayView: View {
 
                 if fromIdx != toIdx {
                     LaunchpadStore.shared.reorderAppInFolder(folderId: self.folder.id, fromIndex: fromIdx, toIndex: toIdx)
-                    self.folder = LaunchpadStore.shared.activeFolder ?? self.folder
                 }
             }
 
@@ -332,7 +339,7 @@ public struct FolderExpandedOverlayView: View {
             if draggedOut {
                 // Dragged OUT of folder: remove from folder and place onto main screen!
                 LaunchpadStore.shared.removeAppFromFolder(app: app, folderId: folder.id)
-                dismiss()
+                dismiss(skipCommitTitle: true)
             } else {
                 LaunchpadStore.shared.saveLayout()
             }
@@ -403,14 +410,15 @@ public struct FolderExpandedOverlayView: View {
     private func commitTitle() {
         isTitleFocused = false
         let trimmed = folderName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
-            folder.name = trimmed
+        if !trimmed.isEmpty && trimmed != folder.name {
             LaunchpadStore.shared.updateFolderName(folderId: folder.id, newName: trimmed)
         }
     }
 
-    private func dismiss() {
-        commitTitle()
+    private func dismiss(skipCommitTitle: Bool = false) {
+        if !skipCommitTitle {
+            commitTitle()
+        }
         withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
             isAppeared = false
         }

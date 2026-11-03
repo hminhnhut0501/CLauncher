@@ -99,32 +99,54 @@ public final class LaunchpadStore: ObservableObject {
         var reconstructed: [LaunchpadItem] = []
         var assignedIds = Set<String>()
 
-        // 1. Rebuild Saved Folders
+        // 1. Rebuild Saved Folders (filtering out dissolved/empty ones and deduplicating apps)
         for sf in config.folders {
-            let children = sf.appIds.compactMap { appMap[$0] }
-            for c in children { assignedIds.insert(c.id) }
-            let folder = LaunchpadFolder(id: sf.id, name: sf.name, apps: children)
-            reconstructed.append(.folder(folder))
+            var children: [AppItem] = []
+            for appId in sf.appIds {
+                if !assignedIds.contains(appId), let app = appMap[appId] {
+                    assignedIds.insert(appId)
+                    children.append(app)
+                }
+            }
+            if children.count > 1 {
+                let folder = LaunchpadFolder(id: sf.id, name: sf.name, apps: children)
+                reconstructed.append(.folder(folder))
+            } else {
+                // If only 1 or 0 apps remained in saved folder, dissolve it
+                for child in children {
+                    reconstructed.append(.app(child))
+                }
+            }
         }
 
         // 2. Default Utilities Folder if none saved
         if config.folders.isEmpty {
             let utils = apps.filter { $0.url.path.contains("/Utilities") }
             if !utils.isEmpty {
-                for u in utils { assignedIds.insert(u.id) }
+                for u in utils {
+                    if !assignedIds.contains(u.id) {
+                        assignedIds.insert(u.id)
+                    }
+                }
                 let utilFolder = LaunchpadFolder(name: "Utilities", apps: utils)
                 reconstructed.append(.folder(utilFolder))
             }
         }
 
-        // 3. Append remaining apps
+        // 3. Append remaining apps (strictly deduplicated)
         for app in apps where !assignedIds.contains(app.id) {
+            assignedIds.insert(app.id)
             reconstructed.append(.app(app))
         }
 
-        // 4. Apply saved custom order if present
+        // 4. Apply saved custom order if present (safe against duplicates!)
         if !config.itemOrder.isEmpty {
-            let orderMap = Dictionary(uniqueKeysWithValues: config.itemOrder.enumerated().map { ($1, $0) })
+            var orderMap: [String: Int] = [:]
+            for (idx, id) in config.itemOrder.enumerated() {
+                if orderMap[id] == nil {
+                    orderMap[id] = idx
+                }
+            }
             reconstructed.sort { a, b in
                 let orderA = orderMap[a.id] ?? 999999
                 let orderB = orderMap[b.id] ?? 999999
@@ -250,23 +272,55 @@ public final class LaunchpadStore: ObservableObject {
         guard case .folder(var currentFolder) = items[folderIndex] else { return }
         currentFolder.apps.removeAll(where: { $0.id == app.id })
 
+        // Remove any existing duplicate of this app on the root grid
+        items.removeAll(where: {
+            if case .app(let a) = $0 { return a.id == app.id }
+            return false
+        })
+
+        // Also clean from any other folders if previously duplicated
+        for i in 0..<items.count {
+            if case .folder(var f) = items[i], f.id != folderId {
+                if f.apps.contains(where: { $0.id == app.id }) {
+                    f.apps.removeAll(where: { $0.id == app.id })
+                    items[i] = .folder(f)
+                }
+            }
+        }
+
+        // Re-find target folder index
+        guard let targetIndex = items.firstIndex(where: {
+            if case .folder(let f) = $0 { return f.id == folderId }
+            return false
+        }) else {
+            items.append(.app(app))
+            activeFolder = nil
+            saveLayout()
+            return
+        }
+
         withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
             if currentFolder.apps.isEmpty {
                 // Delete empty folder and insert dragged app into items
-                items.remove(at: folderIndex)
-                items.insert(.app(app), at: folderIndex)
+                items.remove(at: targetIndex)
+                items.insert(.app(app), at: min(targetIndex, items.count))
                 activeFolder = nil
             } else if currentFolder.apps.count == 1 {
                 // Dissolve folder: extract the remaining app and this app
                 let remainingApp = currentFolder.apps[0]
-                items.remove(at: folderIndex)
-                items.insert(.app(remainingApp), at: folderIndex)
-                items.insert(.app(app), at: min(folderIndex + 1, items.count))
+                items.remove(at: targetIndex)
+                items.removeAll(where: {
+                    if case .app(let a) = $0 { return a.id == remainingApp.id }
+                    return false
+                })
+                let insertIdx = min(targetIndex, items.count)
+                items.insert(.app(remainingApp), at: insertIdx)
+                items.insert(.app(app), at: min(insertIdx + 1, items.count))
                 activeFolder = nil
             } else {
                 // Folder still has 2 or more apps: keep folder updated
-                items[folderIndex] = .folder(currentFolder)
-                items.insert(.app(app), at: min(folderIndex + 1, items.count))
+                items[targetIndex] = .folder(currentFolder)
+                items.insert(.app(app), at: min(targetIndex + 1, items.count))
                 activeFolder = currentFolder
             }
         }
@@ -358,16 +412,47 @@ public final class LaunchpadStore: ObservableObject {
 
     public func saveLayout() {
         var savedFolders: [SavedFolder] = []
+        var seenAppIds = Set<String>()
+        var cleanedItems: [LaunchpadItem] = []
+
         for item in items {
-            if case .folder(let f) = item {
-                savedFolders.append(SavedFolder(id: f.id, name: f.name, appIds: f.apps.map(\.id)))
+            switch item {
+            case .app(let app):
+                if !seenAppIds.contains(app.id) {
+                    seenAppIds.insert(app.id)
+                    cleanedItems.append(item)
+                }
+            case .folder(let folder):
+                var uniqueApps: [AppItem] = []
+                for a in folder.apps {
+                    if !seenAppIds.contains(a.id) {
+                        seenAppIds.insert(a.id)
+                        uniqueApps.append(a)
+                    }
+                }
+                if uniqueApps.count > 1 {
+                    let cleanedFolder = LaunchpadFolder(id: folder.id, name: folder.name, apps: uniqueApps)
+                    cleanedItems.append(.folder(cleanedFolder))
+                    savedFolders.append(SavedFolder(id: cleanedFolder.id, name: cleanedFolder.name, appIds: uniqueApps.map(\.id)))
+                } else if uniqueApps.count == 1 {
+                    cleanedItems.append(.app(uniqueApps[0]))
+                }
+            }
+        }
+
+        // Deduplicate itemOrder IDs
+        var seenOrderIds = Set<String>()
+        var uniqueItemOrder: [String] = []
+        for item in cleanedItems {
+            if seenOrderIds.insert(item.id).inserted {
+                uniqueItemOrder.append(item.id)
             }
         }
 
         let config = LaunchpadConfiguration(
             columnsCount: columnsCount,
             rowsCount: rowsCount,
-            itemOrder: items.map(\.id),
+            itemOrder: uniqueItemOrder,
             folders: savedFolders,
             hiddenAppIds: Array(hiddenBundleIds)
         )

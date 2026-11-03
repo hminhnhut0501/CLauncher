@@ -327,7 +327,9 @@ public struct FolderExpandedOverlayView: View {
         pressStartTime = nil
         activeTouchedApp = nil
 
-        if !wasDragging && distance < 6 && elapsed < 0.30 {
+        let isClick = distance < 8 && (!wasDragging || elapsed < 0.40)
+
+        if isClick {
             if let app = touched {
                 // Clicked on app: launch it
                 launchApp(app)

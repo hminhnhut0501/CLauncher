@@ -121,11 +121,17 @@ public struct AppGridView: View {
     }
 
     private func handleDragChanged(_ value: DragGesture.Value, totalWidth: CGFloat) {
+        // In search mode, disable reordering and folder creation (strictly click-to-launch)
+        guard store.searchText.isEmpty else { return }
+
         store.pageWidth = totalWidth
         let currentPoint = value.location
         let distance = hypot(value.translation.width, value.translation.height)
         let geometry = GridGeometry(totalWidth: totalWidth, columns: store.columnsCount, rows: store.rowsCount)
         let currentPageItems = store.pages.indices.contains(store.currentPage) ? store.pages[store.currentPage] : []
+
+        // Local point relative to current page content (compensating for live trackpad swipe offset)
+        let localPoint = CGPoint(x: currentPoint.x - motion.dragOffset, y: currentPoint.y)
 
         if pressStartTime == nil {
             pressStartTime = Date()
@@ -134,16 +140,16 @@ public struct AppGridView: View {
             // Dual Hit-Testing:
             // 1. Pixel-perfect preference frame lookup (measured directly on rendered view)
             if let hitByFrame = currentPageItems.first(where: {
-                layoutStore.cellFrames[$0.id]?.contains(value.startLocation) == true
+                layoutStore.cellFrames[$0.id]?.contains(localPoint) == true
             }) {
                 activeTouchedItem = hitByFrame
-            } else if let idx = geometry.itemIndex(at: value.startLocation, maxItems: currentPageItems.count) {
+            } else if let idx = geometry.itemIndex(at: localPoint, maxItems: currentPageItems.count) {
                 // 2. Mathematical GridGeometry fallback
                 activeTouchedItem = currentPageItems[idx]
             }
 
-            // Start Press & Hold (Nhấn Giữ) Timer (0.20s):
-            // After holding down for 0.20s, the icon lifts up into hand with haptic feedback!
+            // Start Press & Hold (Nhấn Giữ) Timer (0.35s standard Springboard dwell):
+            // After holding down for 0.35s without moving, the icon lifts up into hand with haptic feedback!
             if let touched = activeTouchedItem {
                 let holdWork = DispatchWorkItem { [weak motion] in
                     guard self.activeTouchedItem?.id == touched.id, self.store.draggedItem == nil else { return }
@@ -154,15 +160,15 @@ public struct AppGridView: View {
                     NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
                 }
                 pressHoldWorkItem = holdWork
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.20, execute: holdWork)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: holdWork)
             }
         }
 
         guard let touched = activeTouchedItem else { return }
         currentDragPoint = currentPoint
 
-        // When moving beyond 5pt, cancel hold timer and enter live drag immediately
-        if distance > 5 {
+        // When moving beyond 7pt, cancel hold timer and enter live drag immediately
+        if distance > 7 {
             pressHoldWorkItem?.cancel()
             pressHoldWorkItem = nil
 
@@ -188,19 +194,19 @@ public struct AppGridView: View {
 
             // 2. Collision check against items on CURRENT PAGE
             var hitItem: LaunchpadItem? = nil
-            if let hitIdx = geometry.itemIndex(at: currentPoint, maxItems: currentPageItems.count) {
+            if let hitIdx = geometry.itemIndex(at: localPoint, maxItems: currentPageItems.count) {
                 let cand = currentPageItems[hitIdx]
                 if cand.id != touched.id {
                     hitItem = cand
                 }
-            } else if let cand = currentPageItems.first(where: { $0.id != touched.id && layoutStore.cellFrames[$0.id]?.contains(currentPoint) == true }) {
+            } else if let cand = currentPageItems.first(where: { $0.id != touched.id && layoutStore.cellFrames[$0.id]?.contains(localPoint) == true }) {
                 hitItem = cand
             }
 
             if let hit = hitItem {
                 let targetFrame = layoutStore.cellFrames[hit.id] ?? geometry.frame(for: currentPageItems.firstIndex(where: { $0.id == hit.id }) ?? 0)
                 let center = CGPoint(x: targetFrame.midX, y: targetFrame.midY)
-                let distToCenter = hypot(currentPoint.x - center.x, currentPoint.y - center.y)
+                let distToCenter = hypot(localPoint.x - center.x, localPoint.y - center.y)
 
                 let isDraggingApp: Bool = {
                     if case .app = touched { return true }
@@ -322,8 +328,10 @@ public struct AppGridView: View {
         activeTouchedItem = nil
         pendingMergeTargetId = nil
 
-        if !wasDragging && distance < 6 && elapsed < 0.28 {
-            // Quick Click / Tap
+        let isClick = distance < 8 && (!wasDragging || elapsed < 0.38)
+
+        if isClick {
+            // Quick or deliberate Click / Tap
             if let item = touched {
                 switch item {
                 case .app(let app):

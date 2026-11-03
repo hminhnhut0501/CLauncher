@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import SwiftUI
 
 public final class LaunchpadPanel: NSPanel {
     public var onDismiss: (() -> Void)?
@@ -86,15 +87,29 @@ public final class LaunchpadPanel: NSPanel {
         }
 
         if event.type == .keyDown {
+            let isEditingText = (firstResponder is NSTextView) || (firstResponder is NSTextField)
+
             if event.keyCode == 53 { // Escape
-                onDismiss?()
-                return
-            } else if event.keyCode == 123 || event.keyCode == 116 { // Left arrow or Page Up
-                handlePageTurn(-1)
-                return
-            } else if event.keyCode == 124 || event.keyCode == 121 { // Right arrow or Page Down
-                handlePageTurn(1)
-                return
+                if LaunchpadStore.shared.activeFolder != nil {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                        LaunchpadStore.shared.activeFolder = nil
+                    }
+                    return
+                } else if !LaunchpadStore.shared.searchText.isEmpty {
+                    LaunchpadStore.shared.searchText = ""
+                    return
+                } else {
+                    onDismiss?()
+                    return
+                }
+            } else if !isEditingText {
+                if event.keyCode == 123 || event.keyCode == 116 { // Left arrow or Page Up
+                    handlePageTurn(-1)
+                    return
+                } else if event.keyCode == 124 || event.keyCode == 121 { // Right arrow or Page Down
+                    handlePageTurn(1)
+                    return
+                }
             }
         }
 

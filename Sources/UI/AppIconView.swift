@@ -33,7 +33,7 @@ public struct AppIconView: View {
 
     public var body: some View {
         VStack(spacing: 8) {
-            ZStack(alignment: .topLeading) {
+            ZStack {
                 // Folder Merge Target Highlight (When another app is dragged over this app)
                 if isFolderTarget {
                     RoundedRectangle(cornerRadius: 28, style: .continuous)
@@ -43,7 +43,6 @@ public struct AppIconView: View {
                                 .fill(Color.white.opacity(0.35))
                         )
                         .frame(width: iconSize + 16, height: iconSize + 16)
-                        .offset(x: -8, y: -8)
                         .scaleEffect(1.08)
                         .animation(.spring(response: 0.25, dampingFraction: 0.65), value: isFolderTarget)
                 }

@@ -214,28 +214,59 @@ public struct AppGridView: View {
                     store.moveItem(from: touched.id, to: hit.id)
                 } else {
                     // DRAGGING AN APP:
-                    // Check if lingering in target icon zone (distToCenter <= 55pt)
-                    if distToCenter <= 55 {
-                        if pendingMergeTargetId != hit.id {
-                            cancelMergeDwell()
-                            pendingMergeTargetId = hit.id
+                    let isHitFolder: Bool = {
+                        if case .folder = hit { return true }
+                        return false
+                    }()
 
-                            let targetId = hit.id
-                            let work = DispatchWorkItem { [weak motion] in
-                                guard self.pendingMergeTargetId == targetId else { return }
-                                withAnimation(.spring(response: 0.24, dampingFraction: 0.68)) {
-                                    motion?.hoverFolderTargetId = targetId
+                    if isHitFolder {
+                        // CASE A: DRAGGING AN APP OVER AN EXISTING FOLDER!
+                        // Wide, generous drop zone (up to 75pt radius = entire folder tile)
+                        if distToCenter <= 75 {
+                            // Instantly highlight folder as absorb target
+                            if motion.hoverFolderTargetId != hit.id {
+                                cancelMergeDwell()
+                                withAnimation(.spring(response: 0.20, dampingFraction: 0.68)) {
+                                    motion.hoverFolderTargetId = hit.id
                                 }
                                 NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
                             }
-                            mergeDwellWorkItem = work
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+                        } else {
+                            // Outside folder zone (> 75pt)
+                            if motion.hoverFolderTargetId == hit.id {
+                                cancelMergeDwell()
+                            }
+                            // Only reorder if dragging far past the folder (> 85pt)
+                            if distToCenter > 85 {
+                                store.moveItem(from: touched.id, to: hit.id)
+                            }
                         }
                     } else {
-                        // User is dragging past outer perimeter (> 55pt):
-                        // Cancel merge dwell and reorder slots immediately!
-                        cancelMergeDwell()
-                        store.moveItem(from: touched.id, to: hit.id)
+                        // CASE B: DRAGGING AN APP OVER ANOTHER APP (Create New Folder)!
+                        // Generous zone (up to 62pt)
+                        if distToCenter <= 62 {
+                            if pendingMergeTargetId != hit.id && motion.hoverFolderTargetId != hit.id {
+                                cancelMergeDwell()
+                                pendingMergeTargetId = hit.id
+
+                                let targetId = hit.id
+                                let work = DispatchWorkItem { [weak motion] in
+                                    guard self.pendingMergeTargetId == targetId else { return }
+                                    withAnimation(.spring(response: 0.22, dampingFraction: 0.68)) {
+                                        motion?.hoverFolderTargetId = targetId
+                                    }
+                                    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+                                }
+                                mergeDwellWorkItem = work
+                                // Fast, responsive 0.22s dwell timer
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: work)
+                            }
+                        } else {
+                            // User is dragging past outer perimeter (> 65pt):
+                            // Cancel merge dwell and reorder slots immediately!
+                            cancelMergeDwell()
+                            store.moveItem(from: touched.id, to: hit.id)
+                        }
                     }
                 }
             } else {

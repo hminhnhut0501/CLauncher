@@ -1,0 +1,20 @@
+# macOS / Xcode
+.DS_Store
+*.swp
+*~
+
+# Swift Package Manager & Build Artifacts
+/.build
+/Packages
+xcuserdata/
+DerivedData/
+.swiftpm/
+
+# macOS Bundles & Disk Images
+*.app/
+*.dmg
+/Launchpad.app/
+/TahoeLaunchpad.app/
+
+# Environment & Credentials
+.netrc

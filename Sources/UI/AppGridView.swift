@@ -1,0 +1,346 @@
+import SwiftUI
+import AppKit
+
+public struct AppGridView: View {
+    @ObservedObject private var store = LaunchpadStore.shared
+    @ObservedObject private var motion = GridMotionStore.shared
+    public let onLaunch: () -> Void
+    public let onOpenFolder: (LaunchpadFolder) -> Void
+    public let onTapBackground: () -> Void
+
+    @State private var activeTouchedItem: LaunchpadItem? = nil
+    @State private var pressStartTime: Date? = nil
+    @State private var edgePageWorkItem: DispatchWorkItem?
+    @State private var mergeDwellWorkItem: DispatchWorkItem?
+    @State private var pendingMergeTargetId: String? = nil
+    private let layoutStore = GridLayoutStore()
+
+    public init(
+        onLaunch: @escaping () -> Void,
+        onOpenFolder: @escaping (LaunchpadFolder) -> Void,
+        onTapBackground: @escaping () -> Void
+    ) {
+        self.onLaunch = onLaunch
+        self.onOpenFolder = onOpenFolder
+        self.onTapBackground = onTapBackground
+    }
+
+    private var gridColumns: [GridItem] {
+        Array(
+            repeating: GridItem(.flexible(minimum: 120, maximum: 160), spacing: 20),
+            count: store.columnsCount
+        )
+    }
+
+    public var body: some View {
+        GeometryReader { geometry in
+            let totalWidth = geometry.size.width
+
+            ZStack(alignment: .topLeading) {
+                // 1. Horizontally Paginated Grid Pages
+                HStack(alignment: .top, spacing: 0) {
+                    ForEach(0..<store.pages.count, id: \.self) { pageIndex in
+                        VStack(spacing: 0) {
+                            LazyVGrid(columns: gridColumns, alignment: .center, spacing: 18) {
+                                ForEach(store.pages[pageIndex], id: \.id) { item in
+                                    let isBeingDragged = store.draggedItem?.id == item.id
+                                    let isFolderTarget = motion.hoverFolderTargetId == item.id
+
+                                    cellView(item: item, isFolderTarget: isFolderTarget)
+                                        .opacity(isBeingDragged ? 0.18 : 1.0)
+                                        .background(
+                                            GeometryReader { geo in
+                                                if pageIndex == store.currentPage {
+                                                    Color.clear.preference(
+                                                        key: CellFramePreferenceKey.self,
+                                                        value: [item.id: geo.frame(in: .named("AppGridViewSpace"))]
+                                                    )
+                                                }
+                                            }
+                                        )
+                                }
+                            }
+                            .padding(.horizontal, 48)
+                            .padding(.top, 4)
+                            Spacer(minLength: 0)
+                        }
+                        .frame(width: totalWidth)
+                    }
+                }
+                .offset(x: -CGFloat(store.currentPage) * totalWidth + motion.dragOffset)
+
+                // 2. Dedicated 120Hz Floating Dragged Representation (Absolute pixel-perfect cursor tracking)
+                if let dragged = store.draggedItem {
+                    FloatingDraggedIconView(item: dragged)
+                        .position(motion.dragLocation)
+                        .zIndex(9999)
+                        .allowsHitTesting(false)
+                }
+            }
+            .coordinateSpace(name: "AppGridViewSpace")
+            .contentShape(Rectangle())
+            // Single container gesture: 100% immune to cell view hierarchy invalidations!
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .named("AppGridViewSpace"))
+                    .onChanged { value in
+                        handleDragChanged(value, totalWidth: totalWidth)
+                    }
+                    .onEnded { value in
+                        handleDragEnded(value)
+                    }
+            )
+        }
+        .onAppear {
+            store.pageWidth = NSScreen.main?.frame.width ?? 1440
+        }
+        .onPreferenceChange(CellFramePreferenceKey.self) { frames in
+            layoutStore.cellFrames = frames
+        }
+    }
+
+    @ViewBuilder
+    private func cellView(item: LaunchpadItem, isFolderTarget: Bool) -> some View {
+        switch item {
+        case .app(let app):
+            AppIconView(
+                app: app,
+                isFolderTarget: isFolderTarget,
+                onHide: { store.hideApp(app) },
+                onLaunch: onLaunch
+            )
+        case .folder(let folder):
+            FolderThumbnailIconView(
+                folder: folder,
+                isFolderTarget: isFolderTarget,
+                onTap: { onOpenFolder(folder) }
+            )
+        }
+    }
+
+    private func handleDragChanged(_ value: DragGesture.Value, totalWidth: CGFloat) {
+        store.pageWidth = totalWidth
+        let currentPoint = value.location
+        let distance = hypot(value.translation.width, value.translation.height)
+
+        if pressStartTime == nil {
+            pressStartTime = Date()
+
+            // Find which item was initially touched on CURRENT PAGE
+            let currentPageItems = store.pages.indices.contains(store.currentPage) ? store.pages[store.currentPage] : []
+            activeTouchedItem = currentPageItems.first(where: {
+                layoutStore.cellFrames[$0.id]?.contains(value.startLocation) == true
+            })
+        }
+
+        guard let touched = activeTouchedItem else { return }
+
+        // Drag movement detected: enter live drag directly (clean native macOS behavior)
+        if distance > 6 {
+            if store.draggedItem?.id != touched.id {
+                store.draggedItem = touched
+            }
+            motion.dragLocation = currentPoint
+
+            // 1. Edge-Paging across screens while dragging near left/right screen borders
+            let edgeMargin: CGFloat = 65.0
+            if currentPoint.x < edgeMargin && store.currentPage > 0 {
+                cancelMergeDwell()
+                triggerEdgePage(direction: -1)
+            } else if currentPoint.x > totalWidth - edgeMargin && store.currentPage < store.pages.count - 1 {
+                cancelMergeDwell()
+                triggerEdgePage(direction: 1)
+            } else {
+                edgePageWorkItem?.cancel()
+                edgePageWorkItem = nil
+            }
+
+            // 2. Collision check against items on CURRENT PAGE
+            let currentPageItems = store.pages.indices.contains(store.currentPage) ? store.pages[store.currentPage] : []
+            if let hit = currentPageItems.first(where: { $0.id != touched.id && layoutStore.cellFrames[$0.id]?.contains(currentPoint) == true }) {
+                guard let targetFrame = layoutStore.cellFrames[hit.id] else { return }
+                let center = CGPoint(x: targetFrame.midX, y: targetFrame.midY)
+                let distToCenter = hypot(currentPoint.x - center.x, currentPoint.y - center.y)
+
+                let isDraggingApp: Bool = {
+                    if case .app = touched { return true }
+                    return false
+                }()
+
+                if !isDraggingApp {
+                    // DRAGGING A FOLDER:
+                    // Folders never merge into other folders or apps.
+                    // Instant, frictionless reordering!
+                    cancelMergeDwell()
+                    store.moveItem(from: touched.id, to: hit.id)
+                } else {
+                    // DRAGGING AN APP:
+                    // Check if lingering in target icon zone (distToCenter <= 55pt)
+                    if distToCenter <= 55 {
+                        if pendingMergeTargetId != hit.id {
+                            cancelMergeDwell()
+                            pendingMergeTargetId = hit.id
+
+                            let targetId = hit.id
+                            let work = DispatchWorkItem { [weak motion] in
+                                guard self.pendingMergeTargetId == targetId else { return }
+                                withAnimation(.spring(response: 0.24, dampingFraction: 0.68)) {
+                                    motion?.hoverFolderTargetId = targetId
+                                }
+                                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+                            }
+                            mergeDwellWorkItem = work
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+                        }
+                    } else {
+                        // User is dragging past outer perimeter (> 55pt):
+                        // Cancel merge dwell and reorder slots immediately!
+                        cancelMergeDwell()
+                        store.moveItem(from: touched.id, to: hit.id)
+                    }
+                }
+            } else {
+                cancelMergeDwell()
+            }
+        }
+    }
+
+    private func cancelMergeDwell() {
+        mergeDwellWorkItem?.cancel()
+        mergeDwellWorkItem = nil
+        pendingMergeTargetId = nil
+        if motion.hoverFolderTargetId != nil {
+            withAnimation(.spring(response: 0.20, dampingFraction: 0.75)) {
+                motion.hoverFolderTargetId = nil
+            }
+        }
+    }
+
+    private func triggerEdgePage(direction: Int) {
+        guard edgePageWorkItem == nil else { return }
+        let targetPage = store.currentPage + direction
+        guard targetPage >= 0 && targetPage < store.pages.count else { return }
+
+        let work = DispatchWorkItem {
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                store.currentPage = targetPage
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                edgePageWorkItem = nil
+            }
+        }
+        edgePageWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.40, execute: work)
+    }
+
+    private func handleDragEnded(_ value: DragGesture.Value) {
+        edgePageWorkItem?.cancel()
+        edgePageWorkItem = nil
+        mergeDwellWorkItem?.cancel()
+        mergeDwellWorkItem = nil
+
+        let elapsed = Date().timeIntervalSince(pressStartTime ?? Date())
+        let distance = hypot(value.translation.width, value.translation.height)
+        let touched = activeTouchedItem
+        let wasDragging = store.draggedItem != nil
+        let targetId = motion.hoverFolderTargetId
+
+        pressStartTime = nil
+        activeTouchedItem = nil
+        pendingMergeTargetId = nil
+
+        if !wasDragging && distance < 6 && elapsed < 0.35 {
+            // Quick Click / Tap
+            if let item = touched {
+                switch item {
+                case .app(let app):
+                    launchApp(app)
+                case .folder(let folder):
+                    onOpenFolder(folder)
+                }
+            } else {
+                // Clicked on empty space: dismiss
+                onTapBackground()
+            }
+        } else if wasDragging, let dragged = touched {
+            // Drop after dragging
+            if let targetId = targetId {
+                store.mergeIntoFolder(sourceId: dragged.id, targetId: targetId)
+            } else {
+                store.saveLayout()
+            }
+        }
+
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+            store.draggedItem = nil
+            motion.hoverFolderTargetId = nil
+        }
+    }
+
+    private func launchApp(_ app: AppItem) {
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.openApplication(at: app.url, configuration: config, completionHandler: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            onLaunch()
+        }
+    }
+}
+
+public final class GridLayoutStore: @unchecked Sendable {
+    public var cellFrames: [String: CGRect] = [:]
+}
+
+// Global Frame Preference for 100% accurate collision & folder creation detection
+public struct CellFramePreferenceKey: PreferenceKey {
+    public static let defaultValue: [String: CGRect] = [:]
+    public static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
+// 120Hz Floating Dragged Representation
+private struct FloatingDraggedIconView: View {
+    let item: LaunchpadItem
+    @State private var iconCGImage: CGImage?
+
+    init(item: LaunchpadItem) {
+        self.item = item
+        if case .app(let app) = item {
+            self._iconCGImage = State(initialValue: IconCacheService.shared.memoryCachedCGIcon(for: app))
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            switch item {
+            case .app:
+                if let cgImage = iconCGImage {
+                    Image(decorative: cgImage, scale: 2.0)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 108, height: 108)
+                } else {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(Color.white.opacity(0.2))
+                        .frame(width: 108, height: 108)
+                }
+            case .folder(let folder):
+                FolderThumbnailIconView(folder: folder, onTap: {})
+            }
+
+            Text(item.displayName)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.white)
+                .lineLimit(1)
+                .frame(width: 124)
+                .shadow(color: Color.black.opacity(0.95), radius: 1, x: 0, y: 1)
+        }
+        .scaleEffect(1.15)
+        .shadow(color: Color.black.opacity(0.55), radius: 26, x: 0, y: 16)
+        .task {
+            if case .app(let app) = item, iconCGImage == nil {
+                iconCGImage = await IconCacheService.shared.cgIcon(for: app)
+            }
+        }
+    }
+}

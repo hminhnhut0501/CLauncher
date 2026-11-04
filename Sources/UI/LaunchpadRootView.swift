@@ -15,6 +15,11 @@ public struct LaunchpadRootView: View {
         NSScreen.main?.visibleFrame.origin.y ?? 0
     }
 
+    private var topPadding: CGFloat {
+        let safeTop = NSScreen.main?.safeAreaInsets.top ?? 0
+        return max(54, safeTop + 18)
+    }
+
     private func handleBackgroundTap() {
         if store.activeFolder != nil {
             store.activeFolder = nil
@@ -35,7 +40,7 @@ public struct LaunchpadRootView: View {
 
             // 2. Main Traditional macOS Launchpad Layout
             VStack(spacing: 8) {
-                // Top Search Bar area
+                // Top Search Bar area (spaced cleanly below notch)
                 HStack {
                     Spacer()
                     LiquidGlassSearchBar(text: $store.searchText) {
@@ -43,8 +48,8 @@ public struct LaunchpadRootView: View {
                     }
                     Spacer()
                 }
-                .padding(.top, 28)
-                .padding(.bottom, 4)
+                .padding(.top, topPadding)
+                .padding(.bottom, 16)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     // Click on the empty margin around the search bar dismisses

@@ -232,7 +232,7 @@ struct TestGeometry {
     let columns: Int
     let rows: Int
     let padH: Double = 48
-    let padTop: Double = 4
+    let padTop: Double = 24
     let spacingX: Double = 20
     let spacingY: Double = 18
     let cellHeight: Double = 144

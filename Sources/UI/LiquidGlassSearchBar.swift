@@ -11,15 +11,15 @@ public struct LiquidGlassSearchBar: View {
     }
 
     public var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(isFocused ? .white : .white.opacity(0.65))
-                .shadow(color: isFocused ? Color(red: 0.85, green: 0.95, blue: 1.0, opacity: 0.6) : Color.clear, radius: 6)
+                .shadow(color: isFocused ? Color(red: 0.85, green: 0.95, blue: 1.0, opacity: 0.6) : Color.clear, radius: 5)
 
-            TextField("Search applications, keywords, or initials...", text: $text)
+            TextField("Search applications...", text: $text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 15, weight: .regular))
+                .font(.system(size: 13.5, weight: .regular))
                 .foregroundColor(.white)
                 .focused($isFocused)
                 .onSubmit {
@@ -29,17 +29,17 @@ public struct LiquidGlassSearchBar: View {
             if !text.isEmpty {
                 Button(action: { text = "" }) {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 15))
+                        .font(.system(size: 13.5))
                         .foregroundColor(.white.opacity(0.75))
                 }
                 .buttonStyle(.plain)
                 .transition(.scale.combined(with: .opacity))
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
-        .frame(width: 480, height: 48)
-        .appleLiquidGlass(cornerRadius: 24, isHighlighted: isFocused)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(width: 320, height: 36)
+        .appleLiquidGlass(cornerRadius: 18, isHighlighted: isFocused)
         .animation(.spring(response: 0.32, dampingFraction: 0.8), value: isFocused)
     }
 }

@@ -63,7 +63,7 @@ public struct AppGridView: View {
                                 }
                             }
                             .padding(.horizontal, 48)
-                            .padding(.top, 4)
+                            .padding(.top, 24)
                             Spacer(minLength: 0)
                         }
                         .frame(width: totalWidth)
@@ -373,7 +373,7 @@ public struct GridGeometry {
     public let columns: Int
     public let rows: Int
     public let padH: CGFloat = 48
-    public let padTop: CGFloat = 4
+    public let padTop: CGFloat = 24
     public let spacingX: CGFloat = 20
     public let spacingY: CGFloat = 18
     public let cellHeight: CGFloat = 144
